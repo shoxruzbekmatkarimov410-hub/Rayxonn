@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#050308">
+<title>Rayxona uchun</title>
+<style>
+@font-face{
+  font-family:Chorus;
+  src:url(data:...BASE64_QISQARTIRILDI...) format("opentype");
+  font-display:block;
+}
+html,body{margin:0;height:100%;background:#050308;overflow:hidden;-webkit-tap-highlight-color:transparent;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+
+#ui{position:fixed;left:0;right:0;bottom:calc(7% + env(safe-area-inset-bottom,0px));text-align:center;
+  color:#e9d8c4;font:11px "Courier New",monospace;letter-spacing:3px;transition:opacity 1s}
+#open{margin-top:14px;padding:12px 24px;background:rgba(0,0,0,.35);color:#f0dcc6;
+  border:1px solid #c9a98a;border-radius:30px;font:12px "Courier New",monospace;letter-spacing:3px;cursor:pointer}
+#open:hover{background:rgba(201,169,138,.15)}
+
+.bar{position:fixed;top:calc(12px + env(safe-area-inset-top,0px));right:12px;z-index:5;display:flex;gap:8px}
+.b{background:rgba(0,0,0,.45);color:#f3e6ee;border:1px solid rgba(255,255,255,.28);border-radius:20px;
+  font:11px "Courier New",monospace;letter-spacing:2px;padding:8px 12px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;transition:opacity .6s,background .2s}
+.b:hover{background:rgba(255,122,154,.18)}
+.b[hidden]{display:none}
+.b i{width:8px;height:8px;border-radius:50%;background:#ff4f86;box-shadow:0 0 8px #ff4f86}
+.b.off i{background:transparent;box-shadow:none;border:1px solid #ff4f86}
+
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<audio id="au" loop preload="auto" src="data:...BASE64_QISQARTIRILDI..."></audio>
+
+<div id="ui">
+  <div id="cap">RAYXONA UCHUN XAT KELDI</div>
+  <button id="open" type="button">KONVERTNI OCHISH</button>
+</div>
+
+<div class="bar">
+  <button class="b" id="asc" type="button">ASCII</button>
+  <button class="b" id="snd" type="button"><i></i> OVOZ</button>
+  <button class="b" id="rep" type="button" hidden>QAYTA</button>
+  <button class="b" id="fs" type="button" aria-label="To'liq ekran">&#9974;</button>
+</div>
+
+<script>
+/* Rayxona uchun — zarrachali konvert, girdob, ism va atirgul.
+   Sozlash: pastdagi CONFIG yoki havolaga  ?ism=Ismingiz  qo'shing. */
+(function () {
+  'use strict';
+
+  /* ---------- SOZLAMALAR ---------- */
+  var q = new URLSearchParams(location.search);
+  var CONFIG = {
+    name: (q.get('ism') || q.get('name') || 'Rayxona').slice(0, 24),
+    small: q.get('matn') || 'Sen uchun',   // ism tepasidagi kichik yozuv
+    volume: 0.85
+  };
+  document.title = CONFIG.name + ' uchun';
+  document.getElementById('cap').textContent = CONFIG.name.toUpperCase() + ' UCHUN XAT KELDI';
+
+  /* ---------- ASOSIY O'ZGARUVCHILAR ---------- */
+  var cv = document.getElementById('c'), cx = cv.getContext('2d');
+  var au = document.getElementById('au'), ui = document.getElementById('ui');
+  var btnOpen = document.getElementById('open'), btnAsc = document.getElementById('asc'),
+      btnSnd = document.getElementById('snd'), btnRep = document.getElementById('rep'),
+      btnFs = document.getElementById('fs');
+  var off = document.createElement('canvas'), oc = off.getContext('2d', { willReadFrequently: true });
+
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var N = innerWidth < 700 ? 7000 : 10500, NA = N;     // NA — chizilayotgan zarrachalar soni
+  var W = 1, H = 1, dpr = 1, stage = 0, t0 = 0, last = 0, ascii = false;
+  var RP = { cx: 0, r: 1, y: 0 }, RV = 300, PX = 0, PY = 0, PA = false;
+  var fpsAcc = 0, fpsN = 0, fpsDone = false, fadeTimer = 0;
+
+  var F = function (n) { return new Float32Array(n); };
+  var X = F(N), Y = F(N), VX = F(N), VY = F(N), TX = F(N), TY = F(N),
+      R = F(N), G = F(N), B = F(N), TR = F(N), TG = F(N), TB = F(N),
+      P1 = F(N), P2 = F(N), P3 = F(N), S = F(N),
+      K = new Uint8Array(N), LJ = new Uint8Array(N);
+
+  var SCRIPT = 'Chorus,"Apple Chancery","Zapf Chancery","URW Chancery L","Snell Roundhand",cursive';
+  var SERIF  = 'Georgia,"Times New Roman",serif';
+  var RAMP = '.:-=+*#%@', stars = [], petals = [], i;
+
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+  for (i = 0; i < N; i++) { S[i] = rnd(.6, 1.4); X[i] = rnd(0, innerWidth); Y[i] = rnd(0, innerHeight); R[i] = G[i] = B[i] = 120; }
+  for (i = 0; i < 150; i++) stars.push([Math.random(), Math.random(), rnd(0, 6.28), rnd(.8, 1.8)]);
+
+  /* ---------- YORDAMCHI FUNKSIYALAR ---------- */
+  function sample(draw, step) {
+    oc.clearRect(0, 0, W, H); draw(oc);
+    var d = oc.getImageData(0, 0, W, H).data, L = [];
+    for (var y = 0; y < H; y += step) for (var x = 0; x < W; x += step) {
+      var j = (y * W + x) * 4;
+      if (d[j + 3] > 110) L.push([x + rnd(-.8, .8), y + rnd(-.8, .8), d[j], d[j + 1], d[j + 2]]);
+    }
+    return L;
+  }
+  function assign(parts) {
+    var out = [], k;
+    parts.forEach(function (p) {
+      var L = p[0].slice().sort(function () { return Math.random() - .5; }), qn = Math.round(p[1] * N);
+      for (var n = 0; n < qn && L.length; n++) out.push(L[n % L.length]);
+    });
+    while (out.length < N) out.push(out[(Math.random() * out.length) | 0]);
+    out.sort(function () { return Math.random() - .5; });
+    for (k = 0; k < N; k++) {
+      var o = out[k];
+      TX[k] = o[0]; TY[k] = o[1]; TR[k] = o[2]; TG[k] = o[3]; TB[k] = o[4];
+      K[k] = o[5] || 0; P1[k] = o[6] || 0; P2[k] = o[7] || 0; LJ[k] = o[8] || 0; P3[k] = o[9] || 0;
+    }
+  }
+  function fit(c, t, fam, max, fs) {
+    c.font = fs + 'px ' + fam;
+    while (c.measureText(t).width > max && fs > 10) { fs *= .94; c.font = fs + 'px ' + fam; }
+    return fs;
+  }
+  function heart(c, x, y, s, col) {
+    c.fillStyle = col; c.beginPath(); c.moveTo(x, y + s * .35);
+    c.bezierCurveTo(x - s, y - s * .3, x - s * .5, y - s, x, y - s * .45);
+    c.bezierCurveTo(x + s * .5, y - s, x + s, y - s * .3, x, y + s * .35); c.fill();
+  }
+  function grad(c, a, b) {
+    var g = c.createLinearGradient(W * a, 0, W * b, 0);
+    g.addColorStop(0, '#ff5f98'); g.addColorStop(.55, '#ffb3cd'); g.addColorStop(1, '#fff0f5'); return g;
+  }
+
+  /* ---------- SAHNALARNI QURISH ---------- */
+  function build(s) {
+    var k;
+    if (s === 0) {                       /* 0: KONVERT */
+      var ew = Math.min(W * .64, 360), eh = ew * .64, x0 = W / 2 - ew / 2, y0 = H * .4 - eh / 2, mx = W / 2;
+      var L = sample(function (c) {
+        c.strokeStyle = '#e8cfae'; c.lineWidth = 2; c.beginPath(); c.rect(x0, y0, ew, eh);
+        c.moveTo(x0, y0); c.lineTo(mx, y0 + eh * .56); c.lineTo(x0 + ew, y0);
+        c.moveTo(x0, y0 + eh); c.lineTo(x0 + ew * .42, y0 + eh * .45);
+        c.moveTo(x0 + ew, y0 + eh); c.lineTo(x0 + ew * .58, y0 + eh * .45); c.stroke();
+        // yurakli muhr (yaltirab turadi)
+        var sx = mx, sy = y0 + eh * .5, sg = c.createRadialGradient(sx, sy, 0, sx, sy, ew * .09);
+        sg.addColorStop(0, 'rgba(255,110,170,.95)'); sg.addColorStop(1, 'rgba(255,110,170,0)');
+        c.fillStyle = sg; c.beginPath(); c.arc(sx, sy, ew * .09, 0, 6.3); c.fill();
+        heart(c, sx, sy, ew * .05, '#ff9cc2');
+        c.fillStyle = '#fff3e4'; c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.font = 'bold ' + ew * .11 + 'px "Courier New",monospace'; c.fillText('FOR YOU', mx, y0 + eh * .76);
+      }, 2);
+      var D = [], cy = y0 + eh / 2;
+      for (k = 0; k < 1300; k++) {                       // konvert ichidagi mayda chang
+        D.push([rnd(x0 + 4, x0 + ew - 4), rnd(y0 + 4, y0 + eh - 4), 255, rnd(190, 235), rnd(150, 205)]);
+      }
+      var D2 = [];
+      for (k = 0; k < 900; k++) {                        // atrofdagi bulut
+        var g1 = rnd(-1, 1) + rnd(-1, 1) + rnd(-1, 1), g2 = rnd(-1, 1) + rnd(-1, 1) + rnd(-1, 1);
+        D2.push([mx + g1 * ew * .4, cy + g2 * eh * .55, 255, rnd(190, 240), rnd(150, 215)]);
+      }
+      assign([[L, .72], [D, .16], [D2, .12]]);
+
+    } else if (s === 2) {                /* 2: QIZIL GIRDOB */
+      RV = Math.min(W * .42, 330);
+      for (k = 0; k < N; k++) {
+        var rr = Math.sqrt(rnd(.01, 1)), ring = Math.round(rr * 70) / 70;   // ingichka halqalar
+        K[k] = 2; P1[k] = RV * ring + rnd(-.8, .8);
+        P2[k] = rnd(0, 6.2832);
+        P3[k] = rnd(.85, 1.15);
+        TR[k] = 255; TG[k] = rnd(20, 85); TB[k] = rnd(60, 115);
+      }
+
+    } else if (s === 3) {                /* 3: ISM */
+      assign([[sample(function (c) {
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        fit(c, CONFIG.name, SCRIPT, W * .88, Math.min(W * .34, 260));
+        c.fillStyle = grad(c, .2, .8); c.fillText(CONFIG.name, W / 2, H * .46);
+      }, 2), 1]]);
+
+    } else {                             /* 4: ATIRGUL + YOZUV */
+      var rc = W / 2, rr2 = Math.min(W * .27, H * .17), ry = H * .3, sy = ry + rr2 * .82, ey = H * .7;
+      var Lr = [], Ls = [], Ll = [], Lg = [];
+      RP = { cx: rc, r: rr2, y: ry };
+      for (k = 0; k < N * .62; k++) {
+        var u = Math.random(), hl = Math.random() < .09, tw = Math.random() < .04,
+            ph = Math.acos(rnd(-1, 1)), th = rnd(0, 6.2832), jl = Math.floor(rnd(0, 6));
+        var sh = Math.pow(u, 2.2);                                   // ichi to'q, yuzasi och
+        var cr = 255 - 25 * (1 - u), cg = 22 + 105 * sh + (hl ? 95 : 0), cb = 90 + 110 * sh + (hl ? 80 : 0);
+        if (tw) { cr = 255; cg = 232; cb = 244; }
+        Lr.push([0, 0, cr, cg, cb, 1, u, th, jl, ph]);
+      }
+      for (k = 0; k < N * .05; k++)                                  // atirgul atrofidagi yaltiroq changlar
+        Lr.push([0, 0, 255, rnd(170, 230), rnd(200, 240), 4, rnd(1.1, 1.6), rnd(0, 6.2832), 0, Math.random()]);
+      for (k = 0; k < 520; k++) { var f = Math.random(); Ls.push([rc + Math.sin(f * 3) * 5 + rnd(-1.4, 1.4), sy + (ey - sy) * f, 90, rnd(225, 250), rnd(160, 195)]); }
+      var leaf = function (side, f0, len, wd) {
+        for (var n = 0; n < 380; n++) {
+          var u2 = Math.random(), w = Math.sin(u2 * 3.14) * wd * rnd(-1, 1);
+          Ll.push([rc + Math.sin(f0 * 3) * 5 + side * u2 * len, sy + (ey - sy) * f0 - u2 * len * .35 + w, 70, rnd(205, 240), rnd(140, 180)]);
+        }
+      };
+      leaf(1, .4, rr2 * 1.1, rr2 * .2); leaf(-1, .55, rr2 * .9, rr2 * .17); leaf(1, .8, rr2 * .6, rr2 * .12);
+      var Lt = sample(function (c) {
+        c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#f4e6d8';
+        fit(c, CONFIG.name, SCRIPT, W * .7, Math.min(W * .2, 96)); c.fillStyle = grad(c, .3, .7); c.fillText(CONFIG.name, rc, H * .86);
+      }, 1);
+      var Lm = []; for (k = 0; k < 300; k++) Lm.push([rnd(0, W), rnd(0, H), 255, rnd(120, 190), rnd(170, 210), 3]);
+      // atirgul zarrachalari alohida (Lr), qolganlari assign orqali
+      var rose = Lr.length;
+      assign([[Ls, .04], [Ll, .05], [Lt, .18], [Lm, .06]]);
+      // assign hammasini to'ldirib bo'ldi — atirgulga ajratilgan o'rinlarni qayta belgilaymiz
+      var idx = [], n2;
+      for (k = 0; k < N; k++) idx.push(k);
+      idx.sort(function () { return Math.random() - .5; });
+      for (n2 = 0; n2 < rose && n2 < N; n2++) {
+        var o = Lr[n2], t = idx[n2];
+        TX[t] = RP.cx; TY[t] = RP.y; TR[t] = o[2]; TG[t] = o[3]; TB[t] = o[4];
+        K[t] = o[5]; P1[t] = o[6]; P2[t] = o[7]; LJ[t] = o[8]; P3[t] = o[9];
+      }
+    }
+  }
+  var t4 = 0;
+  function go(s) { stage = s; build(s); if (s === 4) { btnRep.hidden = false; t4 = performance.now(); } }
+
+  function start() {
+    if (stage !== 0 && stage !== 4) return;
+    stage = 1; t0 = performance.now(); ui.style.opacity = 0; ui.style.pointerEvents = 'none'; btnRep.hidden = true;
+    var m = Math.max(W, H) / 900;
+    for (var k = 0; k < N; k++) {
+      var a = rnd(0, 6.28), v = rnd(2, 15) * m;
+      VX[k] = Math.cos(a) * v; VY[k] = Math.sin(a) * v; K[k] = 0;
+      TR[k] = 255; TG[k] = rnd(25, 80); TB[k] = rnd(70, 110);
+    }
+    petals.length = 0;
+    playMusic();
+  }
+  function replay() {
+    if (stage !== 4) return;
+    btnRep.hidden = true; petals.length = 0; stage = 0; build(0);
+    for (var k = 0; k < N; k++) { VX[k] += rnd(-6, 6); VY[k] += rnd(-6, 6); }
+    ui.style.opacity = 1; ui.style.pointerEvents = 'auto';
+  }
+  function resize() {
+    dpr = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight;
+    cv.width = W * dpr; cv.height = H * dpr; cx.setTransform(dpr, 0, 0, dpr, 0, 0); off.width = W; off.height = H;
+    if (stage === 0 || stage >= 3) build(stage);
+  }
+
+  /* ---------- MUSIQA ---------- */
+  function playMusic() {
+    try {
+      au.volume = 0; var p = au.play(); if (p && p.catch) p.catch(function () {});
+      clearInterval(fadeTimer);
+      fadeTimer = setInterval(function () {
+        if (au.volume < CONFIG.volume - .03) au.volume = Math.min(1, au.volume + .03); else clearInterval(fadeTimer);
+      }, 120);
+    } catch (e) {}
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) au.pause(); else if (stage > 0 && !au.muted) { try { au.play(); } catch (e) {} }
+  });
+
+  /* ---------- PAYTAL (atirgul bosqichida to'kiladigan gulbarglar) ---------- */
+  function spawnPetal() {
+    if (petals.length > 22) return;
+    petals.push({
+      x: RP.cx + rnd(-RP.r, RP.r) * .9, y: RP.y + rnd(-RP.r * .2, RP.r * .5),
+      vy: rnd(.35, .9), sw: rnd(.6, 1.4), ph: rnd(0, 6.28), rot: rnd(0, 6.28), vr: rnd(-.03, .03),
+      s: rnd(4, 8), a: 1
+    });
+  }
+  function drawPetals(f, tm) {
+    cx.globalCompositeOperation = 'source-over';
+    for (var n = petals.length - 1; n >= 0; n--) {
+      var p = petals[n];
+      p.y += p.vy * f; p.x += Math.sin(tm * p.sw + p.ph) * .6 * f; p.rot += p.vr * f;
+      if (p.y > H * .72) p.a -= .02 * f;
+      if (p.a <= 0) { petals.splice(n, 1); continue; }
+      cx.save(); cx.translate(p.x, p.y); cx.rotate(p.rot); cx.globalAlpha = .75 * p.a;
+      cx.fillStyle = '#ff5f98'; cx.beginPath(); cx.ellipse(0, 0, p.s, p.s * .55, 0, 0, 6.3); cx.fill();
+      cx.globalAlpha = .45 * p.a; cx.fillStyle = '#ffd0e0'; cx.beginPath(); cx.ellipse(-p.s * .2, -p.s * .1, p.s * .5, p.s * .25, 0, 0, 6.3); cx.fill();
+      cx.restore();
+    }
+  }
+
+  /* ---------- ASOSIY SIKL ---------- */
+  function frame(now) {
+    var dtr = (now - last) / 1000, dt = Math.min(.05, dtr), f = dt * 60, tt = (now - t0) / 1000, tm = now / 1000;
+    last = now;
+
+    // FPS ga qarab sifatni avtomatik pasaytirish
+    if (!fpsDone && stage >= 2) {
+      fpsAcc += dtr; fpsN++;
+      if (fpsN >= 90) { if (fpsAcc / fpsN > .028) NA = Math.floor(N * .6); fpsDone = true; }
+    }
+
+    if (stage === 1 && tt > .9) go(2); else if (stage === 2 && tt > 4.2) go(3); else if (stage === 3 && tt > 9) go(4);
+
+    cx.globalCompositeOperation = 'source-over'; cx.globalAlpha = 1;
+    var bg = cx.createRadialGradient(W / 2, H * .42, 0, W / 2, H * .42, Math.max(W, H) * .8);
+    bg.addColorStop(0, '#1a0a20'); bg.addColorStop(1, '#050308'); cx.fillStyle = bg; cx.fillRect(0, 0, W, H);
+    cx.fillStyle = '#fff';
+    for (i = 0; i < stars.length; i++) {
+      var st = stars[i]; cx.globalAlpha = .22 + .3 * Math.sin(now / 700 + st[2]); cx.fillRect(st[0] * W, st[1] * H, st[3], st[3]);
+    }
+    cx.globalCompositeOperation = 'lighter';
+    if (stage >= 4) {
+      var pulse = .16 + .05 * Math.sin(tm * 1.6);
+      var gl = cx.createRadialGradient(RP.cx, RP.y, 0, RP.cx, RP.y, RP.r * 2.8);
+      gl.addColorStop(0, 'rgba(255,50,110,' + pulse + ')'); gl.addColorStop(1, 'rgba(255,50,110,0)');
+      cx.globalAlpha = 1; cx.fillStyle = gl; cx.fillRect(0, 0, W, H);
+      if (!reduce && Math.random() < .025 * f) spawnPetal();
+    }
+    cx.globalAlpha = .9;
+
+    var k = stage === 1 ? 0 : stage === 2 ? .04 : .06, dm = Math.pow(stage === 1 ? .975 : .84, f),
+        jit = stage === 0 ? 1.1 : stage === 2 ? 0 : .6;
+    var rr = RP.r * (1 + .03 * Math.sin(tm * 2)), z = (W < 700 ? 1.4 : 1.6), cl = .07 * f;
+    if (ascii) { cx.font = 'bold 10px monospace'; cx.textBaseline = 'top'; }
+
+    for (i = 0; i < NA; i++) {
+      var kk = K[i];
+      if (kk === 1) {                                     // ATIRGUL GULI (yumaloq, tilsimli)
+        var uu = P1[i], th = P2[i] + tm * .32, fi = P3[i], jl = LJ[i],
+            rho = rr * (.30 + .70 * Math.pow(uu, .42)) * (1 + .10 * Math.sin(4 * th + 7 * fi + jl) + .03 * Math.sin(tm * 1.6 + jl)),
+            cf = Math.cos(fi);
+        TX[i] = RP.cx + rho * Math.sin(fi) * Math.cos(th) * 1.05;
+        TY[i] = RP.y - rho * cf * (cf > 0 ? 1.0 : .78) + rho * Math.sin(fi) * Math.sin(th) * .12;
+      } else if (kk === 4) {                              // yaltiroq changlar
+        var a4 = P2[i] + tm * .25 * P3[i];
+        TX[i] = RP.cx + rr * P1[i] * Math.cos(a4);
+        TY[i] = RP.y + rr * P1[i] * Math.sin(a4) * .75 - rr * .15;
+      } else if (kk === 3) {                              // yomg'ir changi
+        TX[i] += (Math.random() - .5) * 1.4; TY[i] += .25; if (TY[i] > H) { TY[i] = -5; TX[i] = rnd(0, W); }
+      } else if (kk === 2) {                              // girdob
+        var a = P2[i] + tm * (3.1 - 2.3 * P1[i] / RV) * P3[i];
+        TX[i] = W / 2 + P1[i] * Math.cos(a); TY[i] = H * .44 + P1[i] * Math.sin(a) * .42;
+      }
+      if (PA) {
+        var dx = X[i] - PX, dy = Y[i] - PY, d2 = dx * dx + dy * dy;
+        if (d2 < 14400 && d2 > 1) { var d = Math.sqrt(d2), p = (1 - d / 120) * 3 * f; VX[i] += dx / d * p; VY[i] += dy / d * p; }
+      }
+      VX[i] = (VX[i] + (TX[i] - X[i]) * k * f) * dm; VY[i] = (VY[i] + (TY[i] - Y[i]) * k * f) * dm;
+      X[i] += VX[i] * f + (Math.random() - .5) * jit; Y[i] += VY[i] * f + (Math.random() - .5) * jit;
+      R[i] += (TR[i] - R[i]) * cl; G[i] += (TG[i] - G[i]) * cl; B[i] += (TB[i] - B[i]) * cl;
+      cx.fillStyle = 'rgb(' + (R[i] | 0) + ',' + (G[i] | 0) + ',' + (B[i] | 0) + ')';
+      if (ascii) cx.fillText(RAMP[Math.min(8, ((R[i] * .3 + G[i] * .59 + B[i] * .11) / 255 * 9) | 0)], X[i], Y[i]);
+      else { var qs = z * S[i] * ((i % 17 === 0) ? .6 + .7 * Math.abs(Math.sin(tm * 4 + i)) : 1); cx.fillRect(X[i], Y[i], qs, qs); }
+    }
+    if (stage >= 4 && !ascii) drawPetals(f, tm);
+    if (stage >= 4) {                                    // kichik yozuv — toza chiziqli, asta paydo bo'ladi
+      cx.globalCompositeOperation = 'source-over';
+      cx.globalAlpha = Math.min(1, (now - t4) / 2500) * .85;
+      cx.fillStyle = '#f4e6d8'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+      cx.font = '500 ' + Math.min(26, W * .055) + 'px ' + SERIF;
+      if ('letterSpacing' in cx) cx.letterSpacing = '5px';
+      cx.fillText(CONFIG.small.toUpperCase(), RP.cx, H * .775);
+      if ('letterSpacing' in cx) cx.letterSpacing = '0px';
+    }
+    requestAnimationFrame(frame);
+  }
+
+  /* ---------- HODISALAR ---------- */
+  btnOpen.addEventListener('click', function (e) { e.stopPropagation(); start(); });
+  cv.addEventListener('click', start);
+  btnAsc.addEventListener('click', function () { ascii = !ascii; });
+  btnSnd.addEventListener('click', function () { au.muted = !au.muted; btnSnd.classList.toggle('off', au.muted); });
+  btnRep.addEventListener('click', replay);
+  btnFs.addEventListener('click', function () {
+    var el = document.documentElement;
+    if (!document.fullscreenElement) { (el.requestFullscreen || el.webkitRequestFullscreen || function () {}).call(el); }
+    else (document.exitFullscreen || document.webkitExitFullscreen || function () {}).call(document);
+  });
+  addEventListener('resize', resize);
+  addEventListener('pointermove', function (e) { PX = e.clientX; PY = e.clientY; PA = true; });
+  addEventListener('pointerdown', function (e) {
+    PX = e.clientX; PY = e.clientY; PA = true;
+    if (stage >= 4) {                                      // bosganda zarrachalar sochilib, qaytib yig'iladi
+      for (var n = 0; n < NA; n++) {
+        var dx = X[n] - PX, dy = Y[n] - PY, d2 = dx * dx + dy * dy;
+        if (d2 < 40000 && d2 > 1) { var d = Math.sqrt(d2), p = (1 - d / 200) * 14; VX[n] += dx / d * p; VY[n] += dy / d * p; }
+      }
+    }
+  });
+  addEventListener('pointerup', function () { PA = false; });
+  document.addEventListener('pointerleave', function () { PA = false; });
+
+  
+  function boot() { resize(); last = performance.now(); requestAnimationFrame(frame); }
+  if (document.fonts && document.fonts.load) {
+    Promise.race([
+      Promise.all([document.fonts.load('80px Chorus')]),
+      new Promise(function (r) { setTimeout(r, 2500); })
+    ]).then(boot, boot);
+  } else boot();
+})();
+
+</script>
+</body>
+</html>
